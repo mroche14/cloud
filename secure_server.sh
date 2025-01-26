@@ -2,14 +2,18 @@
 #
 # Title: Auto-Secure Server Hardening Script
 # Description:
-# 1. Implements cloud-agnostic security measures
-# 2. Requires manual cloud firewall configuration for SSH
-# 3. Installs comprehensive security toolkit
-# 4. Provides post-install audit commands
+#   1. Implements cloud-agnostic security measures
+#   2. Requires manual cloud firewall configuration for SSH
+#   3. Installs comprehensive security toolkit
+#   4. Provides post-install audit commands
 # Pre-requisites:
-# - Generate SSH keys on your local machine: ssh-keygen -t ed25519
-# - Configure cloud firewall to allow current IP + SSH port
-# - Backup critical data before execution
+#   - Generate SSH keys on your local machine: ssh-keygen -t ed25519
+#   - Configure cloud firewall to allow current IP + SSH port
+#   - Backup critical data before execution
+#
+# Usage:
+#   - By default, it runs in interactive mode (you will see all prompts).
+#   - To force non-interactive mode, set INTERACTIVE_INSTALL="false".
 
 cat << "EOF"
 
@@ -25,6 +29,9 @@ EOF
 # =====================
 # INITIALIZATION
 # =====================
+
+# 1) Toggle this to "false" if you want to run fully non-interactively.
+INTERACTIVE_INSTALL="true"
 
 # Check root privileges
 if [ "$EUID" -ne 0 ]; then
@@ -77,11 +84,31 @@ validate_input() {
 
 system_update() {
   echo "🔁 Updating system & installing base packages..."
-  apt update && apt full-upgrade -y
-  apt install -y \
-    ufw fail2ban unattended-upgrades \
-    auditd lynis rkhunter clamav chkrootkit \
-    apparmor apparmor-utils
+
+  if [ "$INTERACTIVE_INSTALL" = "true" ]; then
+    # -- Interactive mode: see any prompts
+    # Remove -y so that apt can ask you if it needs anything
+    # If a package strongly requires input, you'll see it
+    apt update
+    apt full-upgrade
+    apt install \
+      ufw fail2ban unattended-upgrades \
+      auditd lynis rkhunter clamav chkrootkit \
+      apparmor apparmor-utils
+  else
+    # -- Non-interactive mode
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get -y -o Dpkg::Options::="--force-confdef" \
+              -o Dpkg::Options::="--force-confold" \
+              full-upgrade
+    apt-get -y -o Dpkg::Options::="--force-confdef" \
+              -o Dpkg::Options::="--force-confold" \
+              install \
+              ufw fail2ban unattended-upgrades \
+              auditd lynis rkhunter clamav chkrootkit \
+              apparmor apparmor-utils
+  fi
 }
 
 configure_ssh() {
@@ -108,7 +135,7 @@ configure_ssh() {
   
   # Open new SSH port in firewall
   echo "🔥 Opening SSH port ${CONFIG["SSH_PORT"]} in UFW..."
-  ufw allow ${CONFIG["SSH_PORT"]}/tcp
+  ufw allow "${CONFIG["SSH_PORT"]}/tcp"
   ufw reload
   
   # Restart SSH service
