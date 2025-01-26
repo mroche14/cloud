@@ -36,7 +36,6 @@ fi
 declare -A CONFIG=(
   ["SSH_PORT"]=""
   ["ADMIN_USER"]=""
- # ["AUTO_REBOOT_TIME"]="02:00"
   ["ENABLE_2FA"]=""
 )
 
@@ -49,9 +48,17 @@ get_input() {
   echo "🛠️  Configuration (Follow Cloud Provider Guidelines)"
   echo "----------------------------------------------------"
   
-  read -p "➤ New SSH Port (1024-49151): " CONFIG["SSH_PORT"]
-  read -p "➤ Admin Username: " CONFIG["ADMIN_USER"]
-  read -p "➤ Enable SSH 2FA? (y/n): " CONFIG["ENABLE_2FA"]
+  if [ -z "${CONFIG["SSH_PORT"]}" ]; then
+    read -p "➤ New SSH Port (1024-49151): " CONFIG["SSH_PORT"]
+  fi
+  
+  if [ -z "${CONFIG["ADMIN_USER"]}" ]; then
+    read -p "➤ Admin Username: " CONFIG["ADMIN_USER"]
+  fi
+  
+  if [ -z "${CONFIG["ENABLE_2FA"]}" ]; then
+    read -p "➤ Enable SSH 2FA? (y/n): " CONFIG["ENABLE_2FA"]
+  fi
   
   echo -e "\n⚠️  Cloud Firewall Checklist:"
   echo "1. Create firewall rule for SSH port ${CONFIG["SSH_PORT"]}"
@@ -81,22 +88,48 @@ system_update() {
 
 configure_ssh() {
   echo "🔒 SSH Hardening..."
+  
   # Backup original config
   cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
   
+  # Update SSH config
   sed -i "s/#Port 22/Port ${CONFIG["SSH_PORT"]}/" /etc/ssh/sshd_config
   sed -i "s/PermitRootLogin yes/PermitRootLogin no/" /etc/ssh/sshd_config
   echo "AllowUsers ${CONFIG["ADMIN_USER"]}" >> /etc/ssh/sshd_config
   
+  # Test SSH config before applying
+  if ! sshd -t -f /etc/ssh/sshd_config; then
+    echo "❌ SSH config test failed. Restoring backup..."
+    cp /etc/ssh/sshd_config.bak /etc/ssh/sshd_config
+    exit 1
+  fi
+  
+  # Open new SSH port in firewall
+  echo "🔥 Opening SSH port ${CONFIG["SSH_PORT"]} in UFW..."
+  ufw allow ${CONFIG["SSH_PORT"]}/tcp
+  ufw reload
+  
+  # Restart SSH service
+  echo "🔄 Restarting SSH service..."
+  systemctl restart sshd
+  
+  # Verify SSH is running
+  if ! systemctl is-active --quiet sshd; then
+    echo "❌ SSH service failed to start. Restoring backup..."
+    cp /etc/ssh/sshd_config.bak /etc/ssh/sshd_config
+    systemctl restart sshd
+    exit 1
+  fi
+  
+  # Enable 2FA if requested
   if [[ ${CONFIG["ENABLE_2FA"],,} == "y" ]]; then
     echo "🔐 Enabling 2FA..."
     apt install -y libpam-google-authenticator
     echo "auth required pam_google_authenticator.so" >> /etc/pam.d/sshd
     sed -i "s/ChallengeResponseAuthentication no/ChallengeResponseAuthentication yes/" /etc/ssh/sshd_config
     echo "AuthenticationMethods publickey,keyboard-interactive" >> /etc/ssh/sshd_config
+    systemctl restart sshd
   fi
-  
-  systemctl restart sshd
 }
 
 setup_firewall() {
