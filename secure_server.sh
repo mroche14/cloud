@@ -1,5 +1,5 @@
 #!/bin/bash
-
+#
 # Title: Auto-Secure Server Hardening Script
 # Description:
 # 1. Implements cloud-agnostic security measures
@@ -32,11 +32,10 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# Initialize configuration
+# Initialize configuration (using the default 'ubuntu' AWS user)
 declare -A CONFIG=(
-  ["SSH_PORT"]=""
-  ["ADMIN_USER"]=""
-  ["ENABLE_2FA"]=""
+  ["SSH_PORT"]="1042"
+  ["ADMIN_USER"]="ubuntu"
 )
 
 # =====================
@@ -48,16 +47,14 @@ get_input() {
   echo "🛠️  Configuration (Follow Cloud Provider Guidelines)"
   echo "----------------------------------------------------"
   
+  # Prompt for SSH port if not set
   if [ -z "${CONFIG["SSH_PORT"]}" ]; then
     read -p "➤ New SSH Port (1024-49151): " CONFIG["SSH_PORT"]
   fi
-  
+
+  # Prompt for admin user if not set (default to 'ubuntu' on AWS)
   if [ -z "${CONFIG["ADMIN_USER"]}" ]; then
-    read -p "➤ Admin Username: " CONFIG["ADMIN_USER"]
-  fi
-  
-  if [ -z "${CONFIG["ENABLE_2FA"]}" ]; then
-    read -p "➤ Enable SSH 2FA? (y/n): " CONFIG["ENABLE_2FA"]
+    read -p "➤ Admin Username (Default is ubuntu on AWS): " CONFIG["ADMIN_USER"]
   fi
   
   echo -e "\n⚠️  Cloud Firewall Checklist:"
@@ -68,6 +65,7 @@ get_input() {
 }
 
 validate_input() {
+  # Basic numeric check for port range
   [[ ${CONFIG["SSH_PORT"]} =~ ^[0-9]+$ ]] && 
   [ "${CONFIG["SSH_PORT"]}" -ge 1024 ] && 
   [ "${CONFIG["SSH_PORT"]}" -le 49151 ]
@@ -92,9 +90,13 @@ configure_ssh() {
   # Backup original config
   cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
   
-  # Update SSH config
-  sed -i "s/#Port 22/Port ${CONFIG["SSH_PORT"]}/" /etc/ssh/sshd_config
+  # Update SSH port line (remove any #Port or Port lines, replace with our custom port)
+  sed -i 's/^#\?Port .*/Port '"${CONFIG["SSH_PORT"]}"'/' /etc/ssh/sshd_config
+  
+  # Disable root login
   sed -i "s/PermitRootLogin yes/PermitRootLogin no/" /etc/ssh/sshd_config
+  
+  # Restrict SSH to a specific user (default ubuntu on AWS)
   echo "AllowUsers ${CONFIG["ADMIN_USER"]}" >> /etc/ssh/sshd_config
   
   # Test SSH config before applying
@@ -119,16 +121,6 @@ configure_ssh() {
     cp /etc/ssh/sshd_config.bak /etc/ssh/sshd_config
     systemctl restart sshd
     exit 1
-  fi
-  
-  # Enable 2FA if requested
-  if [[ ${CONFIG["ENABLE_2FA"],,} == "y" ]]; then
-    echo "🔐 Enabling 2FA..."
-    apt install -y libpam-google-authenticator
-    echo "auth required pam_google_authenticator.so" >> /etc/pam.d/sshd
-    sed -i "s/ChallengeResponseAuthentication no/ChallengeResponseAuthentication yes/" /etc/ssh/sshd_config
-    echo "AuthenticationMethods publickey,keyboard-interactive" >> /etc/ssh/sshd_config
-    systemctl restart sshd
   fi
 }
 
